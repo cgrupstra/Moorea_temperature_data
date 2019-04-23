@@ -1,0 +1,394 @@
+---
+title: "Moorea HOBO temperature data analysis"
+author: "Carsten Grupstra"
+date: "March 12, 2019"
+output:
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
+    toc_depth: 2
+---
+This R Markdown document contains the HoBo data between August 2017 and March 2019. 
+
+TLDR:
+I compared temperature data between fringe, back and fore reefs in Moorea, based on our HoBo data. Fringe reefs on average are warmer and have more extreme daily temperature ranges. Fore reefs are much more stable, both in term of daily and yearly temperature ranges. Back reefs are intermediately warm and variable. However, these patterns change in relative strength between months. 2019 seems to be a warmer year for the fringe and back reefs.  
+
+#Set up workspace, load, manipulate and visualize raw data
+###Load and manipulate raw data
+```{r setup and load data, echo=FALSE, warning=FALSE, message=FALSE, results="hide"}
+knitr::opts_chunk$set(echo = TRUE)
+setwd("C:/Users/Cas/Google Drive/Rice/Projects/MVP")
+```
+
+Set working directory using 'setwd()', load Tidyverse and other packges using library() and read file using read.csv().
+```{r load packages and data, warning=FALSE, message=FALSE, results="hide"}
+library(tidyverse)
+loadedNamespaces()
+
+library(cowplot)
+library(lme4)
+library(FDB1)
+library(olsrr)
+hobotemp <- read.csv('hobodata_march_2019.csv') 
+```
+
+Check whether the dataset loaded correctly using head(), which will show us the first few rows of the dataset.
+```{r data check}
+head(hobotemp)
+```
+All the correct variables are there! 
+
+Now let's check the number of rows using nrow() to see whether it's the same as the excel file.
+```{r row check}
+nrow(hobotemp)
+```
+Great. Time to transform it and do the analysis.
+
+Transform the date/time column into separate columns for time and date. Also check whether it worked using head(). 
+```{r} 
+hobotemplongdate <- tidyr::separate(hobotemp, 'date',
+                                    into = c('longdate', 'time'),
+                                    sep= ' ') 
+head(hobotemplongdate)
+```
+That worked.
+
+Add a variable for island side, 'side' contingent on the lter sites. I'll use mutate() and ifelse() for this. A bit clunky but it works.
+```{r}
+hobotemplongdate <- dplyr::mutate(hobotemplongdate, side = ifelse(lter == 0.0, "north", ifelse(lter == 1.0, "north", ifelse(lter == 2.0, "north", ifelse(lter == 3.0, "east", ifelse(lter == 3.5, "east", ifelse(lter == 4.0, "east", ifelse(lter == 5.0, "west", ifelse(lter == 5.5, "west", ifelse(lter == 6.0, "west", "diff")))))))))) 
+```
+
+Now see how many north, east and wests there are.
+```{r}
+count(hobotemplongdate, var=side)
+```
+
+Check the table
+```{r}
+head(hobotemplongdate)
+```
+
+##Figure of raw temperature data
+I want to plot the temperature data over time separately for each lter site (0-6) and reef zone (fringe, back, fore). I will use the ggplot function within Tidyverse for this.
+```{r}
+ntempgraph <- ggplot(data=hobotemplongdate, 
+    aes(x=as.Date(longdate, format = "%m / %d / %Y"), 
+    y=temp, colour=zone)) +
+    geom_point(size=1, alpha = 1/10)+ theme_bw()+
+    facet_grid(fct_relevel(zone, "fringe", "back", "fore")~lter)+ 
+    theme(axis.text.x = element_text(angle=45, margin = margin(t=20, r=100)))+
+    labs(title="Raw temperature data", y="Temperature (°C)", x="Date")
+ntempgraph
+```
+
+It seems like there is a difference in mean temperature, daily temperature ranges, and temperature minima and maxima. In the next section I will test for these differences in several ways.
+
+#Analysis of daily average temperatures
+In this section I will analyse average temperature values across sites and zones. First I will manipulate the dataset to calculate daily means, then I will visualize these data and test for significance.
+
+###Manipulate date data
+```{r, hide=TRUE, echo=FALSE, message=FALSE, results="hide"}
+#Check whether the dataset 'hobotemplongdate' has all the lter sites and zones
+unique(hobotemplongdate$zone)
+unique(hobotemplongdate$lter)
+#looks good.
+```
+
+Separate the 'longdate' column into separate columns for month, day and year using the separate() function. I will then combine the year and month columns using the unite() function to facilitate between-year comparisons. By doing this I can calculate monthly or daily averages later on. Check the dataset using the head() function to see the first few rows and the variable names.
+```{r}
+hobofull <- hobotemplongdate %>%
+  tidyr::separate('longdate',
+                  into = c('month', 'day', 'year'),
+                  sep= '/',
+                  remove = FALSE)%>%
+  tidyr::unite('monthyear',
+               c("month", "year"),
+               sep= '/',
+               remove = FALSE)
+head(hobofull)
+```
+There are now separate columns for month, day, year and month/year. Perfect.
+
+###Calculate daily means for temperature
+I want to calculate daily temperature means for each site and zone. I am using the group_by() and summarise() function to do this.
+```{r, warning=FALSE}
+hobofullmean <- hobofull %>%
+  group_by(year, month, day, monthyear, zone, lter, longdate, side)%>%
+  summarise(meantemp = mean(temp))
+
+head(hobofullmean)
+```
+Looks good
+
+##Figure of daily means for temperature
+Now I will plot the daily mean temperature for each reef zone separately but averaged over lter sites. I will use ggplot with the geom_smooth() function to get a line with 95% confidence intervals.
+```{r, message=FALSE}
+meanplot <- ggplot(hobofullmean, 
+                   aes(x=as.Date(longdate, format= "%m / %d / %Y"), y=meantemp))+
+  geom_smooth(aes(colour=zone))+
+    theme_bw()+
+    scale_x_date(breaks="1 month")+
+    theme(axis.text.x = element_text(angle=45, margin = margin(t=20, r=100)))+
+    labs(title= "Daily temperature means", y="Daily mean temperature (°C) with 95% CI", x="Date")
+  
+meanplot
+
+#labels = date_format("%Y-%m-%d"), 
+                 breaks = scales::pretty_breaks(n = 18)
+```
+
+Interestingly, mean daily temperatures seem to increase relatively steadily from the fore reef to the back reef and fringing reef. Temperature differences are most pronounced in January and April. Temperature differences are more pronounced in the fall (October - Jan) and nearly absent in the spring (April - July) 
+
+##Figure of daily means per island side
+```{r, message=FALSE}
+meanplot <- ggplot(hobofullmean, 
+                   aes(x=as.Date(longdate, format= "%m / %d / %Y"), y=meantemp))+
+  geom_smooth(aes(colour=zone))+
+    theme_bw()+
+    scale_x_date(breaks="1 month")+
+    theme(axis.text.x = element_text(angle=45, margin = margin(t=20, r=100)))+
+    labs(title= "Daily temperature means", y="Daily mean temperature (°C) with 95% CI", x="Date")+
+    facet_grid(~side)
+  
+meanplot
+
+#labels = date_format("%Y-%m-%d"), 
+                 breaks = scales::pretty_breaks(n = 18)
+```
+
+###Calculate monthly temperature means 
+Given that the daily temperatures vary so much over time, I want to calculate average ranges for separate time intervals. I will use the group_by() and the summarise() function again, this time to calculate mean daily temperature per month.  
+
+This should leave us with a much smaller dataset. We have 9 sites with back and fringe zones (=18), 3 with back, fringe and fore reef zones (=21). And up to 12 months. That means there should be a maximum of (max. 12*21= 252) 252 rows. However, we don't have data for all months for every site. The total number of rows should therefore be <252. I will check this using the nrow() function to count the number of rows.
+```{r} 
+hobofullmeanmonth <- hobofullmean %>%
+  group_by(year, month, monthyear, lter, zone, side)%>%
+  summarise(meanmonth = mean(meantemp))
+nrow(hobofullmeanmonth)
+```
+Number of rows = 209 which < 252. Makes sense.
+
+##Test for significance between zones, months and LTER sites 
+Now I want to test for significant differences between zones. I will use an anova using the function aov().
+
+
+```{r}
+hobomeanmonthaov <- aov(meanmonth~zone*as.factor(monthyear), data=hobofullmeanmonth)
+summary(hobomeanmonthaov)
+```
+There is a significant effect of zone and month on daily temperature means. 
+
+###What are the assumptions of a Two-Way ANOVA?
+* Your dependent variable - here, "temperature", should be continuous * Your two independent variables - here, "month" and "zone", should be in categorical, independent groups.
+* Sample independence - that each sample has been drawn independently of the other samples
+* Variance Equality - That the variance of data in the different groups should be the same
+* Normality - That each sample is taken from a normally distributed population
+
+I will look at these assumptions using plot(hobomeanmonthaov) by looking at 
+* residuals vs fitted values to check for heteroscedasticity,
+* q-q plot to see whether the residuals are normally distributed,
+* A histogram of the residuals to double-check normal distribution of the residuals
+```{r}
+plot(hobomeanmonthaov)
+hist(hobomeanmonthaov$resid)
+```
+The Residuals vs Fitted curve indicates that there may be some heteroscedasticity at higher and lower fitted values. However, heteroscadisticity supposedly is not a very big problem for ANOVA.
+
+The q-q plot and histogram both indicate that the distribution has long tails. 
+
+```{r}
+bartlett.test(meanmonth~zone, data=hobofullmeanmonth)
+```
+
+
+##Post-hoc tests
+Now I will use a post-hoc test to compare individual zones, lter sites, and months. I am mostly interested in looking at zones, but I included sites and months just to be comprehensive. 
+
+```{r}
+HSD <- TukeyHSD(hobomeanmonthaov, ordered=FALSE)
+HSD
+```
+The zones differ significantly from each other, as do most of the months. LTER sites seem to be more similar. The 0 p-value for comparisons between zones is a limitation of the Tukey_HSD code. Apparently it cannot display more than 8 decimals, or p-values lower than 2e-16.
+
+
+#Analysis of daily temperature ranges
+In this section I will explore differences in temperature ranges between the different zones over time. First I will analyse differences in daily temperature ranges between reef zones, sites, and months. In the section thereafter I will look at daily minima and maxima to look at what drives differences in daily temperature ranges.
+
+###Calculate daily temperature ranges
+I will use the group_by() function to select the variables that I want to keep. I will then use the summarise() function to pick the lowest and highest temperature for each unique date using the min() and max() arguments. Lastly, I will use the mutate() function to create a new column named 'range' in which I subtract the minimum temperature from the daily maximum temperature for every unique day for each lter site and reef zone separately.
+
+Then, I will check the dataset using the function head() again.
+```{r, warning=FALSE}
+hobofullrange <- hobofull %>%
+  group_by(year, month, day, monthyear, zone, lter, longdate, side)%>%
+  summarise(min_temp = min(temp), max_temp = max(temp))%>%
+  mutate(range = max_temp-min_temp)
+
+head(hobofullrange, digits=5)
+```
+Everything went as planned.
+
+##figure of daily temperature ranges 
+Now I will plot the daily ranges for each reef zone separately but with lter sites combined. I will use ggplot with the geom_smooth() function to get a line with 95% confidence intervals.
+```{r, message=FALSE}
+rangeplotfull <- ggplot(data=hobofullrange, 
+                   aes(x=as.Date(longdate, format = "%m / %d / %Y"), 
+                       y=range, colour=zone)) +
+  geom_smooth()+ theme_bw()+
+  theme(axis.text.x = element_text(margin = margin(t=5)))+
+  labs(title="Daily temperature range", y="Mean daily temperature range (°C) with 95% CI ", x="Date")
+
+rangeplotfull
+```
+
+
+##Figure of daily temperature ranges per island side
+```{r, message=FALSE}
+rangeplotfullside <- ggplot(data=hobofullrange, 
+                   aes(x=as.Date(longdate, format = "%m / %d / %Y"), 
+                       y=range, colour=zone)) +
+  geom_smooth()+ theme_bw()+
+  theme(axis.text.x = element_text(margin = margin(t=5)))+
+  labs(title="Daily temperature range", y="Mean daily temperature range (°C) with 95% CI ", x="Date")+
+  facet_grid(~side)
+
+rangeplotfullside
+```
+
+###Calculate average daily ranges per month 
+Given that the daily ranges vary so much over time, I need to calculate average ranges for separate time intervals. I will use the group_by() and the summarise function again, this time to calculate mean daily ranges per month. I will check whether this worked using nrow() to count the number of rows. The number of rows should = 209 again.
+
+```{r}
+hobofullrangemeans <- hobofullrange %>%
+  group_by(year, month, monthyear, lter, zone, side)%>%
+  summarise(meanrange = mean(range))
+nrow(hobofullrangemeans)
+```
+Looks like it worked.
+
+##Boxplots of mean daily ranges per month
+I will make boxplots of the average daily temperature ranges over time calculated per month. I will plot the values for each site on top so that we can see which sites are more or less variable.
+```{r}
+#hobofullrangemeans$month <- factor(hobofullrangemeans$month, levels=c("9", "10", "11", "12", "1", "2", "3", "4", "5", "6", "7", "8"))
+hrmplot <- ggplot(hobofullrangemeans, aes(x=monthyear, y=meanrange))+
+  geom_boxplot() + theme_bw()+
+  geom_point(alpha=3/4, aes(colour=as.factor(lter)))+
+  facet_grid(~fct_relevel(zone, "fringe", "back", "fore"))+
+  labs(title= "Monthly averages of daily temperature range", y="Temperature range (°C)", x="Date")+
+  theme(axis.text.x = element_text(angle=45, margin = margin(t=20, r=100)))
+
+hrmplot
+```
+
+Looks good. Now we can see which of the lter sites contribute most to the temperature ranges. It seems that the fringe reefs for sites 3, 4, 4.5, and 5 are more variable, whereas sites 1, 2, 5.5 and 6 are generally less variable. For the back reefs, it seems that sites 0 and 4 are generally less variable, and sites 3, 3.5 and 2 are more variable.  
+
+##Test for significance differences between zones, months, and LTER sites
+Now I want to test for significant differences between zones. I will use an anova using the function aov()
+```{r}
+hobolm <- aov(meanrange~zone*as.factor(monthyear), data=hobofullrangemeans)
+summary(hobolm)
+```
+There is a significant effect of zone and month on daily temperature variability. Great!
+
+
+##Post-hoc tests
+Now I will use a post-hoc test to compare individual zones, lter sites, and months. I am mostly interested in looking at zones, but I included sites and months anyway just to be comprehensive. 
+
+```{r}
+HSD <- TukeyHSD(hobolm, ordered=FALSE)
+HSD
+```
+The post-hoc test generates a lot of text. The main findings are as follows:
+- All reef zones are significantly different and fore reef is more different from fringe and back reefs than the back and fringe reefs are from each other.
+
+- 10 out of 36 site:site comparisons are significant. Half of these (5) are comparisons between lter 0 and other lter sites. This indicates that lter 0 is quite different from other lter sites. for the rest, it seems that lter sites are pretty similar overall.
+
+- 32 out of 66 month:month comparisons are significant. A lot of these significant comparisons seem to be with months 9, 10, 1, 2 and 3. 
+
+
+#Analysis of daily temperature minima and maxima
+In this section I will look at whether the differences in daily temperature range between back and fringe reefs are driven by differing daily minima or maxima. I will basically be doing the same thing as I did for temperature ranges but for minimum and maximum daily values.
+```{r, echo=FALSE, results="hide"}
+#Check dataset
+
+head(hobofullrange)
+nrow(hobofullrange)
+
+# Looks good.
+```
+
+##Figure of minimum and maximum temperatures
+I am using ggplot again with geom_smooth() to get averages wiht 95% confidence intervals. Beware, this graph will be a little hard to read. The top three lines are daily maximum temperatures and the bottom three lines are daily minimum temperatures.
+```{r, message=FALSE}
+mintemp <- ggplot(hobofullrange, aes(x=as.Date(longdate, format= "%m / %d / %Y"), y=min_temp))+
+  geom_smooth(aes(colour=zone))+
+  theme_bw()+ theme(legend.position = c(0.15,0.82))+
+  labs(title="Daily temperature minima", y="Daily temperature minima (°C) with 95% CI", x="date")+
+  theme(axis.text.x = element_text(angle=45, margin = margin(t=20, r=100)))+
+  coord_cartesian(ylim=c(26,32))
+
+maxtemp <- ggplot(hobofullrange, aes(x=as.Date(longdate, format= "%m / %d / %Y"), y=max_temp))+
+  geom_smooth(aes(colour=zone))+
+  theme_bw()+ theme(legend.position="none")+
+  labs(title="Daily temperature maxima", y="Daily temperature maxima (°C) with 95% CI", x="date")+
+  coord_cartesian(ylim=c(26,32))+
+  theme(axis.text.x = element_text(angle=45, margin = margin(t=20, r=100)))
+
+plot_grid(mintemp, maxtemp)
+```
+
+Maximum temperatures seem to be generally higher in the fringing reefs. The higher daily temperature ranges in the fringe reef before january 2018 seem to be caused by higher maximum temperatures, and after april 2018 by lower minimum temperatures. 
+
+###Calculate average monthly maximum temperatures
+Now I will calculate averages for the daily minimum and maximum temperatures to allow for easy comparison and for statistical tests.
+
+I will use the group_by() and summarise() functions to calculate monthly means.
+```{r} 
+hobofullminmeans <- hobofullrange %>%
+  group_by(year, month, monthyear, lter, zone)%>%
+  summarise(meanmin = mean(min_temp))
+
+hobofullmaxmeans <- hobofullrange %>%
+  group_by(year, month, monthyear, lter, zone)%>%
+  summarise(meanmax = mean(max_temp))
+```
+
+Check the dataframe. There should by 209 rows, just like with the mean daily ranges.
+```{r}
+nrow(hobofullminmeans)
+nrow(hobofullmaxmeans)
+```
+Looks right.
+
+##Test for significance of differences between zones and months
+First I will test for differences between temperature minima.
+```{r}
+minaov <- aov(meanmin~zone*as.factor(monthyear), data=hobofullminmeans)
+summary(minaov)
+```
+Monthly means for daily temperature minima differ signifcantly between reef zones, months and lter sites.
+
+```{r}
+maxaov <- aov(meanmax~zone*as.factor(monthyear), data=hobofullmaxmeans)
+summary(maxaov)
+```
+Mean monthly maximum temperatures also differ between reef zones, months and lter sites. 
+
+##Post-hoc tests
+I will use Tukey tests again. First for the minimum temperatures.
+```{r}
+minHSD <- TukeyHSD(minaov, ordered=FALSE)
+minHSD
+```
+
+There seems to be a significant difference between each of the zones. While it's highly significant for fore:fringe, it's less signficant for fore:back and back:fringe. As can be expected, temperature minima are highly significantly different month-to-month.
+
+Now I'll do the same thing with the maximum temperatures.
+```{r}
+maxHSD <- TukeyHSD(maxaov)
+maxHSD
+```
+Temperature maxima are strongly significantly different between reef zones and between months. 
+
+It seems that differences in daily temperature ranges are mostly driven by differences in daily temperature maxima.
